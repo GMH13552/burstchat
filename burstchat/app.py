@@ -67,7 +67,8 @@ class CompanionApp(App):
         yield Footer()
 
     def on_mount(self):
-        self._log("[dim]小野上线了 👋 随便聊点什么吧[/dim]")
+        name = self.llm.persona.name
+        self._log(f"[dim]{name}上线了 👋 随便聊点什么吧[/dim]")
         self.on_status("✅ 就绪")
 
     # ── Callbacks from Scheduler ──────────────────────────
@@ -77,7 +78,8 @@ class CompanionApp(App):
         if role == "user":
             self._log(f"[dim]{t}[/dim] [bold green]你:[/] {text}")
         else:
-            self._log(f"[dim]{t}[/dim] [bold]小野:[/] {text}")
+            name = self.llm.persona.name
+            self._log(f"[dim]{t}[/dim] [bold]{name}:[/] {text}")
 
     def on_status(self, status: str):
         try:
