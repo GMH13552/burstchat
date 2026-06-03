@@ -9,6 +9,8 @@ from typing import Optional
 
 from .models import State, PendingMessage
 from .llm import LLMClient
+from .search import search_sogou
+from .prompt import SEARCH_RESULT_HINT
 
 
 class Scheduler:
@@ -31,6 +33,7 @@ class Scheduler:
         self._pending_texts: list[tuple] = []
         self._interject_at: Optional[float] = None
         self._deferred_user_msgs: list[dict] = []
+        self._pending_search: str = ""   # 本轮 dispatch 完成后要执行搜索的 query
 
     # ── Message Entry ───────────────────────────────────────
 
@@ -41,7 +44,7 @@ class Scheduler:
         win = self._burst_window(text)
         self.context.append({"role": "user", "content": text})
 
-        if self.state in (State.DISPATCHING, State.AWAITING_REPLAN):
+        if self.state in (State.DISPATCHING, State.AWAITING_REPLAN, State.SEARCHING):
             self._deferred_user_msgs.append({"role": "user", "content": text})
             self._interject_at = now
 
@@ -112,7 +115,9 @@ class Scheduler:
 
     async def _plan_and_dispatch(self, now: float, is_replan: bool = False):
         try:
-            messages = await self.llm.plan_messages(self.context, now, is_replan=is_replan)
+            plan = await self.llm.plan_messages(self.context, now, is_replan=is_replan)
+            messages = plan.messages
+            self._pending_search = plan.search_query  # 存储搜索词，dispatch 完成后执行
 
             if self.state != State.PLANNING:
                 return
@@ -129,6 +134,8 @@ class Scheduler:
             preview = " → ".join(
                 f"[{m.send_at - now:.0f}s] {m.text[:15]}..." for m in messages
             )
+            if self._pending_search:
+                preview += f" | 🔍 {self._pending_search[:20]}"
             self.app.on_status(f"📤 {self.name} {len(messages)} 条" if self.name else f"📤 {len(messages)} 条")
 
             self.dispatch_task = asyncio.create_task(self._dispatch_loop())
@@ -161,13 +168,58 @@ class Scheduler:
                 self._flush_pending_texts()
                 if self._on_flush:
                     self._on_flush()
-                self.state = State.IDLE
-                self.app.on_status("✅ 就绪")
+
+                # ── 联网搜索：消息发完后，如果有 search 请求就搜 ──
+                if self._pending_search:
+                    await self._execute_search_and_replan()
+                else:
+                    self.state = State.IDLE
+                    self.app.on_status("✅ 就绪")
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
             self.app.on_status(f"❌ Dispatch 出错: {e}")
+
+    async def _execute_search_and_replan(self):
+        """执行网页搜索 → 注入结果到 context → 触发 replan"""
+        query = self._pending_search
+        self._pending_search = ""
+        self.state = State.SEARCHING
+        self.app.on_status(f"🔍 搜索中: {query[:30]}...")
+
+        try:
+            response = await search_sogou(query, max_results=5)
+        except Exception as e:
+            self.app.on_status(f"⚠️ 搜索失败: {e}")
+            self.state = State.IDLE
+            return
+
+        if response.error:
+            self.app.on_status(f"⚠️ 搜索失败: {response.error}")
+            self.state = State.IDLE
+            return
+
+        if not response.results:
+            # 没搜到结果，注入提示让 LLM 知道
+            hint = SEARCH_RESULT_HINT.format(
+                query=query,
+                results=f"(没有找到与\"{query}\"相关的结果)",
+            )
+            self.context.append({"role": "system", "content": hint})
+            self.app.on_status(f"🔍 无结果: {query[:20]}...")
+        else:
+            hint = SEARCH_RESULT_HINT.format(
+                query=query,
+                results=response.context_text,
+            )
+            self.context.append({"role": "system", "content": hint})
+            self.app.on_status(f"🔍 找到 {len(response.results)} 条: {query[:20]}...")
+
+        # 触发 replan：用搜索结果生成第二波 burst 消息
+        self.state = State.PLANNING
+        now = time.time()
+        await self._plan_and_dispatch(now, is_replan=True)
 
     def _dispatch_one(self, msg: PendingMessage):
         now = time.time()
@@ -189,11 +241,15 @@ class Scheduler:
             else:
                 pre.append(text)
 
-        def _fmt(texts):
-            return json.dumps({"messages": [{"t": 2 + j * 3, "text": t} for j, t in enumerate(texts)]}, ensure_ascii=False)
+        def _fmt(texts, search_query=""):
+            obj = {"messages": [{"t": 2 + j * 3, "text": t} for j, t in enumerate(texts)]}
+            if search_query:
+                obj["search"] = search_query
+            return json.dumps(obj, ensure_ascii=False)
 
         if pre:
-            self.context.append({"role": "assistant", "content": _fmt(pre)})
+            sq = self._pending_search  # 第一波有搜索的行为，带 search 字段
+            self.context.append({"role": "assistant", "content": _fmt(pre, search_query=sq)})
         for m in self._deferred_user_msgs:
             self.context.append(m)
         if post:

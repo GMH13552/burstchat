@@ -14,6 +14,7 @@ def _here() -> str:
 # ── 格式模板（和人设无关，所有人设共用） ──────────────────────
 
 FORMAT_TEMPLATE = """你是"{name}"，一个{description}。
+今天是{date}。
 你和用户通过文字聊天，关系很近，聊天风格像老朋友发微信。
 
 ## 性格与人设
@@ -24,7 +25,8 @@ FORMAT_TEMPLATE = """你是"{name}"，一个{description}。
 
 ## 输出格式（铁律）
 只输出 JSON 对象：
-{{"messages": [
+{{"search": "有需要查证的填搜索词，没有就 \"\"",
+ "messages": [
   {{"t": 3, "text": "情绪反应（≤6字）"}},
   {{"t": 6, "text": "吐槽碎片1（≤10字）"}},
   {{"t": 8, "text": "吐槽碎片2（≤10字）"}},
@@ -33,7 +35,20 @@ FORMAT_TEMPLATE = """你是"{name}"，一个{description}。
 - `t` = 和上一条消息之间的**间隔秒数**（第一条是距离现在的间隔）
 - 同句碎片间隔 3-4s，换话题间隔 6-9s
 - 长文本（15-20字）加 3-5s，超长（20字+）起步 10s
+- `search` 是必填字段，日常闲聊写空字符串 `""`，需要查证时填搜索词
 - ⚠️ 只有 JSON，没有其他
+
+## 联网搜索
+需要查证某件事时，`search` 填上搜索词，系统搜完把结果给你。
+
+用户: 张雪峰去世了你知道吗
+
+你:
+{{"search": "张雪峰 去世 最新消息",
+ "messages": [
+  {{"t": 3, "text": "草 别吓我"}},
+  {{"t": 4, "text": "我查查"}}
+]}}
 
 ## 回复示例
 {examples_block}
@@ -49,9 +64,14 @@ REPLAN_HINT = (
 
 FORMAT_FOOTER = (
     "【格式铁律 — 你必须严格遵循】\n"
-    '输出格式: {{"messages":[{{"t":秒数,"text":"内容"}},...]}}\n'
+    '输出格式: {{"search": "", "messages":[{{"t":秒数,"text":"内容"}},...]}}\n'
     "t=与上条的间隔。同句3-4s，换话题6-9s。20字+至少10s。\n"
     "{time} 现在开始，你的回复只能是一个JSON对象。"
+)
+
+SEARCH_RESULT_HINT = (
+    "\n📡 你刚才搜了\"{query}\"：\n\n"
+    "{results}"
 )
 
 
@@ -105,7 +125,8 @@ class Persona:
         blocks = []
         for i, burst in enumerate(self.example_bursts):
             user_msgs = "\n".join(f"用户: {m}" for m in burst["input"])
-            output = json.dumps({"messages": burst["output"]}, ensure_ascii=False, indent=2)
+            # 示例都带 search 字段（日常闲聊为空）
+            output = json.dumps({"search": "", "messages": burst["output"]}, ensure_ascii=False, indent=2)
             blocks.append(f"{user_msgs}\n\n你:\n{output}")
         return "\n\n".join(blocks)
 
@@ -113,9 +134,11 @@ class Persona:
         return "\n".join(f"- {r}" for r in self.rules)
 
     def build_system_prompt(self) -> str:
+        from datetime import datetime
         return FORMAT_TEMPLATE.format(
             name=self.name,
             description=self.description,
+            date=datetime.now().strftime("%Y年%m月%d日"),
             persona_block=self._persona_block(),
             style_block=self._style_block(),
             examples_block=self._examples_block(),

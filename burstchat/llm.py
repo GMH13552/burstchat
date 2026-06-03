@@ -9,7 +9,7 @@ from datetime import datetime
 
 from openai import AsyncOpenAI
 
-from .models import PendingMessage
+from .models import PendingMessage, PlanResult
 from .prompt import load_persona, build_footer, REPLAN_HINT
 
 
@@ -31,7 +31,7 @@ class LLMClient:
 
     async def plan_messages(
         self, context: list[dict], now: float, is_replan: bool = False
-    ) -> list[PendingMessage]:
+    ) -> PlanResult:
         system_text = self._system_prompt + (REPLAN_HINT if is_replan else "")
         footer = build_footer(now)
 
@@ -59,7 +59,7 @@ class LLMClient:
 
         return self._parse_response(content, now)
 
-    def _parse_response(self, content: str, now: float) -> list[PendingMessage]:
+    def _parse_response(self, content: str, now: float) -> PlanResult:
         # ── Clean content ──
         if content.startswith("```"):
             lines = content.split("\n")
@@ -85,7 +85,6 @@ class LLMClient:
 
         if data is None and content:
             self._debug_log(f"PLAIN TEXT: {content[:200]}")
-            # Try each block as JSON, or split by newlines
             blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
             if len(blocks) <= 1:
                 blocks = [b.strip() for b in content.split("\n") if b.strip()]
@@ -97,15 +96,23 @@ class LLMClient:
                 except json.JSONDecodeError:
                     all_items.append({"t": 3, "text": block[:120]})
             if all_items:
-                return self._build_messages(all_items, now)
-            return [PendingMessage(now + 2, "嗯嗯")]
+                return PlanResult(messages=self._build_messages(all_items, now))
+            return PlanResult(messages=[PendingMessage(now + 2, "嗯嗯")])
 
         if data is None:
             self._debug_log(f"EMPTY: {repr(content[:200])}")
-            return [PendingMessage(now + 2, "嗯嗯")]
+            return PlanResult(messages=[PendingMessage(now + 2, "嗯嗯")])
+
+        # Extract optional search query
+        search_query = ""
+        if isinstance(data, dict):
+            search_query = str(data.pop("search", "")).strip()
 
         items = self._extract_items(data)
-        return self._build_messages(items, now)
+        return PlanResult(
+            messages=self._build_messages(items, now),
+            search_query=search_query,
+        )
 
     @staticmethod
     def _extract_items(data) -> list[dict]:
