@@ -179,12 +179,12 @@ def _build_cold_hint(gap_sec: float, rp: dict) -> str:
     # 按人设分档
     if avg_delay and instant_pct:
         if instant_pct >= 60 and avg_delay < 60:
-            # 秒回型：平时秒回的人，冷启动也别拖太久
-            base = max(10, int(avg_delay * 1.5))
+            # 秒回型：冷启动保持平时节奏就好
+            base = max(10, avg_delay)
             hint = (
                 f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。"
-                f"你平时是秒回型（通常{int(avg_delay)}s内回复），但这次隔了太久——"
-                f"不要秒回，第一条 t 放 {base}-{base+20}s，假装刚看到消息。\n"
+                f"你平时是秒回型（通常{int(avg_delay)}s内回复），保持正常节奏——"
+                f"第一条 t 放 {base}-{base+15}s。\n"
             )
         elif instant_pct < 30 or avg_delay > 120:
             # 慢回型：压缩到 avg 的 60%，比平时快但别太快
