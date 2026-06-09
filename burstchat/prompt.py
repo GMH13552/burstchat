@@ -187,19 +187,19 @@ def _build_cold_hint(gap_sec: float, rp: dict) -> str:
                 f"不要秒回，第一条 t 放 {base}-{base+20}s，假装刚看到消息。\n"
             )
         elif instant_pct < 30 or avg_delay > 120:
-            # 慢回型：平时就慢，冷启动保持风格
-            base = max(20, int(avg_delay * 0.8))
+            # 慢回型：压缩到 avg 的 60%，比平时快但别太快
+            base = max(20, int(avg_delay * 0.6))
             hint = (
                 f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。"
-                f"你平时回得比较慢（通常{int(avg_delay)}s回复），保持风格——"
-                f"第一条 t 放 {base}-{base+30}s，别突然变快。\n"
+                f"你平时回得比较慢（通常{int(avg_delay)}s回复），冷启动比平时稍快——"
+                f"第一条 t 放 {base}-{base+15}s。\n"
             )
         else:
-            # 中速型
-            base = max(15, int(avg_delay * 1.2))
+            # 中速型：压缩到 avg 的 75%，比平时稍快
+            base = max(15, int(avg_delay * 0.75))
             hint = (
                 f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。"
-                f"第一条 t 放 {base}-{base+25}s，模拟刚拿起手机/刚看到消息的自然延迟。\n"
+                f"第一条 t 放 {base}-{base+15}s，模拟刚拿起手机/刚看到消息的自然延迟。\n"
             )
     else:
         # 没有延迟数据，用默认值
