@@ -26,6 +26,8 @@ class Scheduler:
         self.context: list[dict] = []
         self.pending: list[PendingMessage] = []
         self.last_user_msg_time: float = 0
+        self.last_interaction_time: float = 0  # 上次任何互动（收发都算）
+        self._cold_gap: float = 0  # 本次消息时的冷却间隔
 
         self.burst_timer_task: Optional[asyncio.Task] = None
         self.dispatch_task: Optional[asyncio.Task] = None
@@ -41,6 +43,8 @@ class Scheduler:
         """收到消息 → 进 context → 启动/重置 burst timer"""
         now = time.time()
         self.last_user_msg_time = now
+        self._cold_gap = now - self.last_interaction_time if self.last_interaction_time > 0 else 0
+        self.last_interaction_time = now
         win = self._burst_window(text)
         self.context.append({"role": "user", "content": text})
 
@@ -115,7 +119,10 @@ class Scheduler:
 
     async def _plan_and_dispatch(self, now: float, is_replan: bool = False):
         try:
-            plan = await self.llm.plan_messages(self.context, now, is_replan=is_replan)
+            plan = await self.llm.plan_messages(
+                self.context, now, is_replan=is_replan,
+                cold_gap_sec=getattr(self, '_cold_gap', 0),
+            )
             messages = plan.messages
             self._pending_search = plan.search_query  # 存储搜索词，dispatch 完成后执行
 
@@ -216,13 +223,14 @@ class Scheduler:
             self.context.append({"role": "system", "content": hint})
             self.app.on_status(f"🔍 找到 {len(response.results)} 条: {query[:20]}...")
 
-        # 触发 replan：用搜索结果生成第二波 burst 消息
+# 触发 replan：用搜索结果生成第二波 burst 消息
         self.state = State.PLANNING
         now = time.time()
         await self._plan_and_dispatch(now, is_replan=True)
 
     def _dispatch_one(self, msg: PendingMessage):
         now = time.time()
+        self.last_interaction_time = now
         self.app.on_message(self.name or "assistant", msg.text, now)
         self._pending_texts.append((now, msg.text))
         if self._on_dispatch:

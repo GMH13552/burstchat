@@ -30,10 +30,11 @@ class LLMClient:
             f.write(f"[{ts}] {msg}\n")
 
     async def plan_messages(
-        self, context: list[dict], now: float, is_replan: bool = False
+        self, context: list[dict], now: float, is_replan: bool = False,
+        cold_gap_sec: float = 0,
     ) -> PlanResult:
         system_text = self._system_prompt + (REPLAN_HINT if is_replan else "")
-        footer = build_footer(now)
+        footer = build_footer(now, cold_gap_sec, self.persona.reply_profile)
 
         messages = [
             {"role": "system", "content": system_text},

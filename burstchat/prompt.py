@@ -66,6 +66,7 @@ FORMAT_FOOTER = (
     "【格式铁律 — 你必须严格遵循】\n"
     '输出格式: {{"search": "", "messages":[{{"t":秒数,"text":"内容"}},...]}}\n'
     "t=与上条的间隔。同句3-4s，换话题6-9s。20字+至少10s。\n"
+    "{cold_hint}"
     "{time} 现在开始，你的回复只能是一个JSON对象。"
 )
 
@@ -88,6 +89,7 @@ class Persona:
         self.style = data.get("style", {})
         self.example_bursts = data.get("example_bursts", [])
         self.rules = data.get("rules", [])
+        self.reply_profile = data.get("reply_profile", {})
 
     def _persona_block(self) -> str:
         p = self.persona
@@ -156,8 +158,51 @@ def load_persona(name: str = "xiaoye") -> Persona:
     return Persona(path)
 
 
-def build_footer(now: float) -> str:
+def build_footer(now: float, cold_gap_sec: float = 0, reply_profile: dict = None) -> str:
     from datetime import datetime
+    cold_hint = _build_cold_hint(cold_gap_sec, reply_profile or {})
     return FORMAT_FOOTER.format(
-        time=datetime.fromtimestamp(now).strftime("%H:%M:%S")
+        time=datetime.fromtimestamp(now).strftime("%H:%M:%S"),
+        cold_hint=cold_hint,
     )
+
+
+def _build_cold_hint(gap_sec: float, rp: dict) -> str:
+    """根据人设延迟画像生成个性化的冷启动提示"""
+    if gap_sec <= 300:
+        return ""
+
+    gap_min = int(gap_sec / 60)
+    avg_delay = rp.get("avg_delay_sec", 0)
+    instant_pct = rp.get("instant_pct", 0)
+
+    # 按人设分档
+    if avg_delay and instant_pct:
+        if instant_pct >= 60 and avg_delay < 60:
+            # 秒回型：平时秒回的人，冷启动也别拖太久
+            base = max(10, int(avg_delay * 1.5))
+            hint = (
+                f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。"
+                f"你平时是秒回型（通常{int(avg_delay)}s内回复），但这次隔了太久——"
+                f"不要秒回，第一条 t 放 {base}-{base+20}s，假装刚看到消息。\n"
+            )
+        elif instant_pct < 30 or avg_delay > 120:
+            # 慢回型：平时就慢，冷启动保持风格
+            base = max(20, int(avg_delay * 0.8))
+            hint = (
+                f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。"
+                f"你平时回得比较慢（通常{int(avg_delay)}s回复），保持风格——"
+                f"第一条 t 放 {base}-{base+30}s，别突然变快。\n"
+            )
+        else:
+            # 中速型
+            base = max(15, int(avg_delay * 1.2))
+            hint = (
+                f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。"
+                f"第一条 t 放 {base}-{base+25}s，模拟刚拿起手机/刚看到消息的自然延迟。\n"
+            )
+    else:
+        # 没有延迟数据，用默认值
+        hint = f"⚠️ 距离上次互动已过{gap_min}分钟，处于冷启动。第一条 t 要放长（15-60s），模拟刚拿起手机/刚看到消息的自然延迟。\n"
+
+    return hint
